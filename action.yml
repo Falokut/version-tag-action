@@ -1,0 +1,72 @@
+name: "Push Version Tag"
+description: "Reads version from .version file, updates the tag, and adds changelog"
+author: "Falokut"
+inputs:
+  version_file:
+    description: "Path to the .version file"
+    required: false
+    default: ".version"
+  changelog_file:
+    description: "Path to the changelog file"
+    required: false
+    default: "changelogs.md"
+  GH_TOKEN:
+    description: "GitHub token for authentication"
+    required: true
+outputs:
+  version:
+    description: "Version from the .version file"
+  changelog_entry:
+    description: "Changelog entry for the version"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Read version from file
+      id: get_version
+      run: |
+        VERSION=$(cat ${{ inputs.version_file }} | tr -d '\n')
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+      shell: bash
+
+    - name: Delete existing tag if exists
+      run: |
+        git tag -d $VERSION || true
+        git push origin :refs/tags/$VERSION || true
+      shell: bash
+
+    - name: Read Changelog
+      id: changelog
+      run: |
+        TAG_NAME=${VERSION}
+        CHANGELOG_ENTRY=$(awk -v tag="## $TAG_NAME" '
+        BEGIN {found=0}
+        /^## / {found=0}
+        found {print; exit}
+        tag {found=1}
+        ' ${{ inputs.changelog_file }})
+        echo "CHANGELOG_ENTRY<<EOF" >> $GITHUB_ENV
+        echo "$CHANGELOG_ENTRY" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
+        echo "changelog_entry=$CHANGELOG_ENTRY" >> $GITHUB_OUTPUT
+      shell: bash
+
+    - name: Get Commit Metadata
+      id: commit_metadata
+      run: |
+        COMMIT_AUTHOR_EMAIL=$(git log -1 --pretty=format:'%ae')
+        COMMIT_AUTHOR_NAME=$(git log -1 --pretty=format:'%an')
+        echo "COMMIT_AUTHOR_EMAIL=${COMMIT_AUTHOR_EMAIL}" >> $GITHUB_ENV
+        echo "COMMIT_AUTHOR_NAME=${COMMIT_AUTHOR_NAME}" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Create new tag
+      run: |
+        git config --global user.email "${COMMIT_AUTHOR_EMAIL}"
+        git config --global user.name "${COMMIT_AUTHOR_NAME}"
+        git tag ${VERSION} -m "${CHANGELOG_ENTRY}"
+        git push origin ${VERSION} --quiet
+      env:
+        GITHUB_TOKEN: ${{ inputs.GH_TOKEN }}
+      shell: bash
