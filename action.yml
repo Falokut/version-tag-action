@@ -1,6 +1,7 @@
 name: "Push Version Tag"
 description: "Reads version from .version file, updates the tag, and adds changelog"
 author: "Falokut"
+
 inputs:
   version_file:
     description: "Path to the .version file"
@@ -13,6 +14,7 @@ inputs:
   GH_TOKEN:
     description: "GitHub token for authentication"
     required: true
+
 outputs:
   version:
     description: "Version from the .version file"
@@ -25,31 +27,45 @@ runs:
     - name: Read version from file
       id: get_version
       run: |
+        # ✅ Чтение версии из файла (.version) без пробелов
         VERSION=$(cat ${{ inputs.version_file }} | tr -d '\n')
+        TAG_NAME="v${VERSION}"  # Добавляем префикс "v" для тегов и changelog
+
         echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
         echo "version=$VERSION" >> $GITHUB_OUTPUT
       shell: bash
 
     - name: Delete existing tag if exists
       run: |
-        git tag -d $VERSION || true
-        git push origin :refs/tags/$VERSION || true
+        git tag -d $TAG_NAME || true
+        git push origin :refs/tags/$TAG_NAME || true
       shell: bash
 
     - name: Read Changelog
       id: changelog
       run: |
-        TAG_NAME=${VERSION}
+        echo "🔍 Ищем изменения для тега: $TAG_NAME"
+
         CHANGELOG_ENTRY=$(awk -v tag="## $TAG_NAME" '
         BEGIN {found=0}
-        /^## / {found=0}
-        found {print; exit}
-        tag {found=1}
+        $0 == tag {found=1; next}
+        /^## v[0-9]+\.[0-9]+\.[0-9]+/ && found {exit}
+        found {print}
         ' ${{ inputs.changelog_file }})
+
+        if [ -z "$CHANGELOG_ENTRY" ]; then
+          echo "❌ Не удалось найти changelog для версии $TAG_NAME"
+          exit 1
+        fi
+
         echo "CHANGELOG_ENTRY<<EOF" >> $GITHUB_ENV
         echo "$CHANGELOG_ENTRY" >> $GITHUB_ENV
         echo "EOF" >> $GITHUB_ENV
-        echo "changelog_entry=$CHANGELOG_ENTRY" >> $GITHUB_OUTPUT
+
+        echo "changelog_entry<<EOF" >> $GITHUB_OUTPUT
+        echo "$CHANGELOG_ENTRY" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
       shell: bash
 
     - name: Get Commit Metadata
@@ -65,8 +81,9 @@ runs:
       run: |
         git config --global user.email "${COMMIT_AUTHOR_EMAIL}"
         git config --global user.name "${COMMIT_AUTHOR_NAME}"
-        git tag ${VERSION} -m "${CHANGELOG_ENTRY}"
-        git push origin ${VERSION} --quiet
+
+        git tag -a $TAG_NAME -m "Release ${VERSION}" -m "${CHANGELOG_ENTRY}"
+        git push origin $TAG_NAME --quiet
       env:
         GITHUB_TOKEN: ${{ inputs.GH_TOKEN }}
       shell: bash
